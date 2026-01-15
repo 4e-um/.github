@@ -322,7 +322,8 @@ Redis (Lua 집계)
    ↓
 Kafka (notification-topic)
 ```
-여기서 문제는  Kafka offset commit, Redis 상태 변경, notifiction topic 발행 이 3개를 하나의 원자 트랜잭션으로 묶는 것이 어렵습니다.
+문제
+- Kafka offset commit, Redis 상태 변경, notifiction topic 발행 이 3개를 하나의 원자 트랜잭션으로 묶는 것이 여러움
 => 예) Redis Lua 성공(Redis value 값 업데이트) -> 알림 이벤트 Kafka로 발행 성공 -> offset commit 전 consumer가 죽음 -> Kafka는 같은 usage 이벤트를 다시 전달(정합성 깨짐 문제 발생)
 
 
