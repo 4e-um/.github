@@ -236,9 +236,6 @@ graph LR
 특히, 100만 회선(subscription) 규모에서 “초당 수십만 이벤트”가 유입되는 최악의 상황을 가정하고 설계했습니다.
 
 
----
-
-
 ### 4.1. Data Flow
 
 ```
@@ -260,8 +257,6 @@ Notification Consumer (SMS/Email/Slack 등 알림 처리)
 - usage-data는 초고빈도 스트림 → 집계에 필요한 최소 필드만 전송
 - notification-topic은 저빈도 스트림 → “임계치 초과” 같은 중요한 이벤트만 전달
 
-
----
 
 
 ### 4.2. Kafka 설계
