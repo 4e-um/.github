@@ -277,7 +277,7 @@ Key = subscriptionId (회선 ID)
 - 같은 회선(subscriptionId)의 이벤트는 항상 동일 파티션으로 전달
   -> 회선 단위로 발생하는 이벤트의 순서를 최대한 보장
 
-> Kafka의 파티셔닝 전략을 **"집계 단위(subscriptionId)"**와 일치시키는 것에 집중하였습니다 
+> Kafka의 파티셔닝 전략을 "집계 단위(subscriptionId)"와 일치시키는 것에 집중하였습니다 
 
 #### 4.2.2. Partition 설계
 - usage-data 토픽은 **다수의 파티션**으로 구성
