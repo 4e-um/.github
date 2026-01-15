@@ -266,18 +266,66 @@ Notification Consumer (SMS/Email/Slack 등 알림 처리)
 #### 4.2.1. usage_topic (메인 사용량 스트림)
 
 - 모든 데이터 사용 이벤트가 유입되는 토픽
-- **Key: subscription_id (회선 ID)**
-  - 같은 회선의 이벤트는 같은 파티션으로 라우팅
-  - 회선 단위 순서를 최대한 보장하여 집계 로직 단순화
-    
+- 집계에 필요한 최소 필드만 포함하여 메시지 크기를 최소화
 
-#### 4.2.2. Consumer
+Key 설계: subscriptionId
+```
+Key = subscriptionId (회선 ID)
+```
 
-- **Batch Consumer 도입**
-  - 이벤트를 1건씩 처리하면 네트워크 호출이 급증
-  - Batch로 받아 Lua 스크립트에 한 번에 넘겨 원자 처리 + 호출 횟수 최소화
+- Redis 집계시 "같은 회선의 이벤트가 동시에 다른 Consumer로 분산되는 상황"을 최소화
+- 같은 회선(subscriptionId)의 이벤트는 항상 동일 파티션으로 전달
+  -> 회선 단위로 발생하는 이벤트의 순서를 최대한 보장
+
+> Kafka의 파티셔닝 전략을 "집계 단위(subscriptionId)"와 일치시키는 것에 집중하였습니다 
+
+#### 4.2.2. Partition 설계
+- usage-data 토픽은 **다수의 파티션**으로 구성
+  -> 목적 : 단일 Consumer 병목 방지 및 처리량 증가를 위함
+- 파티션 수는 예상 최대 TPS, Consumer 인스턴스 수, Redis 처치량을 고려해 결정할 예정
+
+
+#### 4.2.3. **Batch Consumer 도입**
+usage-data 토픽의 Consumer는 Batch Consumer 방식으로 동작
+
+Batch Consumer 도입 이유
+  - 이벤트를 1건씩 처리할 경우 Kafka listener 호출 횟수가 증가할 뿐더러 Consumer에서 실행하는 Redis 호출 횟수가 폭증
+  - Batch Consumer로 Kafka poll()로 수신한 레코드를 한 번에 묶어서 처리하여 여러 이벤트를 단일 Redis Lua 실행으로 집계
+
+```
+[단건 처리]
+이벤트 1건 → Redis EVAL 1회
+초당 200,000 이벤트 → Redis EVAL 200,000회
+
+[Batch 처리]
+Batch 1개 → Redis EVAL 1회
+초당 200,000 이벤트 → (예: 1,000건 × 200회)
+```
 
 ---
+
+#### 4.2.4. Kafka 처리 모델과 정합성 전략
+- Kafka Consumer에서는 at-least-once 처리 모델을 사용하여 처리
+- Consumer 재시작/장애 상황에서 동일 이벤트가 다시 전달될 수 있는 문제를 인식
+  -> 이를 고려하여 Redis Lua 내부에서 processed Set Key를 기반으로 이벤트 중복 제거를 처리
+
+> Kafka의 at-least-once 특성과 Redis의 processed Set Key 기반 중복 처리를 결합하여 exactly-once에 가까운 효과를 냄
+
+##### Kafka의 exactly-once를 활용하지 않은 이유?
+현재 데이터 사용량 집계 시스템 구조는 다음과 같습니다
+```
+Kafka (usage-data)
+   ↓
+Consumer
+   ↓
+Redis (Lua 집계)
+   ↓
+Kafka (notification-topic)
+```
+문제 상황 예시
+- Redis Lua 성공(Redis value 값 업데이트) -> 알림 이벤트 Kafka로 발행 성공 -> offset commit 전 consumer가 죽음 -> Kafka는 같은 usage 이벤트를 다시 전달(정합성 깨짐 문제 발생)
+- Kafka offset commit, Redis 상태 변경, notifiction topic 발행 이 3개를 하나의 원자 트랜잭션으로 묶는 것이 어렵다고 판단하여 at-least-once 모델 + Redis processed Set Key 처리 전략을 생각하였습니다
+
 
 ### 4.3. 데이터 사용량 집계 및 임계치 초과 감지 로직
 
