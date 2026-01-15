@@ -277,11 +277,35 @@ Notification Consumer (SMS/Email/Slack 등 알림 처리)
 
 ---
 
-### 4.3. 왜 Redis를 도입하였는가?
+### 4.3. 데이터 사용량 집계 및 임계치 초과 감지 로직
+
+#### 4.3.1.처리 흐름
+1. Kafka에서 **Batch로 사용량 이벤트 수신**
+2. Redis Lua 스크립트에서 아래를 **원자적으로 처리**
+   - dedup: processed Set을 통해 eventId 중복 제거
+   - usage 누적: INCRBY usage:{periodKey}:{subId}
+   - limit 조회: GET limit:{subId}
+   - percent 계산: floor(newTotal * 100 / limit)
+   - threshold 판단 및 단 1회 발행 보장: th:{periodKey}:{subId} 갱신
+3. 초과 이벤트만 선별하여 notification-topic으로 발행
+
+#### 4.3.2 임계치 알림 "중복 없이 1회" 보장 방식
+- th:{periodKey}:{subId} 값은 다음 중 하나
+  - 0 → 아직 알림 없음
+  - 50 → 50%는 이미 보냄
+  - 80 → 80%는 이미 보냄
+  - 100 → 100%는 이미 보냄
+- 새 percent가 올라갈 때 50/80/100 중 "처음 초과한 단계"만 next로 결정하여 알림 발행 및 임계치 업데이트
+
+> **이 로직이 Lua 내부에서 원자적으로 처리되므로 동시에 여러 이벤트가 들어와도 같은 임계치 알림이 중복 발행되지 않습니다**
+
+---
+
+### 4.4. 왜 Redis를 도입하였는가?
 
 이 시스템에서 Redis는 단순 캐시가 아니라 **실시간 집계용 Main Store** 역할을 합니다.
 
-#### 4.3.1. 요구 처리량(최악 상황) 가정
+#### 4.4.1. 요구 처리량(최악 상황) 가정
 
 예: **100만 회선이 5초 내** 사용량 이벤트를 발생
 → 초당 약 200,000 이벤트 유입
@@ -303,7 +327,7 @@ Notification Consumer (SMS/Email/Slack 등 알림 처리)
 초당 최소 수십만의 Read/Write 연산이 발생할 수 있음
 ```
 
-#### 4.3.2. RDB를 적용한다면?
+#### 4.4.2. RDB를 적용한다면?
 
 RDB에서 동일한 로직을 안전하게 구현하려면 보통 다음이 필요합니다
 
@@ -326,7 +350,7 @@ COMMIT;
 - Write Amplification: UPDATE 1회가 실제로는 락/로그/WAL/인덱스 등 여러 물리 작업을 동반
 - 초고빈도 업데이트에 비용이 너무 크게 발생함
 
-#### 4.3.3. Redis를 사용한다면?
+#### 4.4.3. Redis를 사용한다면?
 
 Redis는 아래를 **짧은 시간 안에** 해결하기 유리합니다.
 
@@ -340,27 +364,6 @@ Redis는 아래를 **짧은 시간 안에** 해결하기 유리합니다.
 
 ---
 
-### 4.4. 데이터 사용량 집계 및 임계치 초과 감지 로직
-
-#### 4.4.1.처리 흐름
-1. Kafka에서 **Batch로 사용량 이벤트 수신**
-2. Redis Lua 스크립트에서 아래를 **원자적으로 처리**
-   - dedup: processed Set을 통해 eventId 중복 제거
-   - usage 누적: INCRBY usage:{periodKey}:{subId}
-   - limit 조회: GET limit:{subId}
-   - percent 계산: floor(newTotal * 100 / limit)
-   - threshold 판단 및 단 1회 발행 보장: th:{periodKey}:{subId} 갱신
-3. 초과 이벤트만 선별하여 notification-topic으로 발행
-
-#### 4.4.2 임계치 알림 "중복 없이 1회" 보장 방식
-- th:{periodKey}:{subId} 값은 다음 중 하나
-  - 0 → 아직 알림 없음
-  - 50 → 50%는 이미 보냄
-  - 80 → 80%는 이미 보냄
-  - 100 → 100%는 이미 보냄
-- 새 percent가 올라갈 때 50/80/100 중 "처음 초과한 단계"만 next로 결정하여 알림 발행 및 임계치 업데이트
-
-> **이 로직이 Lua 내부에서 원자적으로 처리되므로 동시에 여러 이벤트가 들어와도 같은 임계치 알림이 중복 발행되지 않습니다**
 
 ### **Redis Lua + Batch Consumer 전략**
 
